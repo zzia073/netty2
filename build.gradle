@@ -1,0 +1,21 @@
+plugins {
+    id 'java'
+}
+
+group 'com.study'
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+repositories {
+
+    mavenCentral()
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+    // 内部三个坐标之间用冒号分隔
+    compile (
+            "io.netty:netty-all:4.1.10.Final"
+    )
+}
