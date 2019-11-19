@@ -1,0 +1,30 @@
+syntax = "proto2";
+//如果没有指定 java_package 则默认用这个，该包名是为了如果不是在java语言中使用的时候用的
+package protofile;
+
+option java_package = "com.study.base.protobuf.protofile";
+//指定当前类名，如果没有指定则会用文件名驼峰规则去生成一个
+option java_outer_classname = "AddressBookProtos";
+
+message Student {
+    required int32 id = 1;
+    required string name = 2;
+    optional string email = 3;
+
+    enum PhoneType {
+        MOBILE = 0;
+        HOME = 1;
+        WORK = 2;
+    }
+
+    message PhoneNumber {
+        required string number = 1;
+        optional PhoneType type = 2 [default = MOBILE];
+    }
+
+    repeated PhoneNumber phones = 4;
+}
+
+message AddressBook {
+    repeated Student people = 1;
+}

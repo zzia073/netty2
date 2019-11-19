@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+    <form onsubmit="return false">
+        <textarea name="message" style="width: 400px;height: 200px;"></textarea>
+        <input type="button" value="发送消息" onclick="send(this.parentElement.firstElementChild.value)">
+    </form>
+    <h3>服务端消息：</h3>
+    <textarea id="serverMsg" style="width: 400px;height: 200px;"></textarea>
+    <input type="button" onclick="document.getElementById('serverMsg').value = ''" value="清空消息">
+    <script type="text/javascript">
+        var ws = null;
+        var serverMsg = document.getElementById('serverMsg');
+
+        if (window.WebSocket){
+            ws = new WebSocket("ws://localhost:8899/ws");
+            ws.onmessage = function (ev) {
+                console.log(ev)
+                console.log(serverMsg)
+                serverMsg.value += ev.data + "\n";
+            };
+            ws.onopen = function (ev) {
+                console.log("onopen")
+                serverMsg.value += '连接成功\n';
+            };
+            ws.onclose = function (ev) {
+                console.log("onclose");
+            };
+        }
+        function send(msg) {
+            if (ws.OPEN == ws.readyState) {
+                ws.send(msg);
+            }
+        }
+    </script>
+</body>
+</html>
