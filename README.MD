@@ -89,3 +89,37 @@
          + 导致很多子类产生
          + 缺乏灵活性
 #### I.NIO
+   1. java.io和nio 的区别
+      + java.io  中最核心的概念是流（Stream），面向流编程。一个流要么是输入流要么是输出流，不可能两者都是。
+      + java.nio 中最核心的概念是选择器（Selector），通道（Channel），缓冲区（Buffer），面向块（block）或者缓冲区（buffer）编程。
+      + Buffer本身就是一块内存，底层实现上就是一个数组。数据的读写都是通过buffer实现的。Buffer承载了读和写两个操作。
+      + Channel中的数据必须通过buffer才能读入程序或程序中的数据必须通过buffer才能写出到Channel
+      + 除了数组之外，Buffer还提供了对于数据的结构化访问方式，并且可以追踪到系统的读写过程。
+      + Java中8中原生数据类型除了Boolean都有各自对应的Buffer类型，如IntBuffer等
+      + 与Stream不同的是，Channel是双向的，一个流只可能是InputStream或是OutputStream，Channel打开后则可以进行读取、写入或是读写。
+      + 由于Channel是双向的，因此它能更好地反映出底层操作系统的真实情况；在Linux系统中，底层操作系统的通道就是双向的。
+      
+   2. Buffer
+      + buffer 中属性的含义
+         + capacity buffer的底层数组的容量，不能为负值且不可变。
+         + limit buffer中第一个不能读或写的位置，不能为负值且不能大于capacity
+         + position buffer中position下一个位置的元素将被读或写，不能大于limit
+         + 0 <= mark <= position <= limit <= capacity
+      + buffer 中重要的方法
+         + allocate();创建一个buffer，一般创建一个HeapXXXBuffer堆上创建一个buffer,调用父类的方法去构建
+         + get();put();都会是position++
+         + flip();limit = position; position = 0;
+         + clear();limit = capacity; position = 0;
+         + get;put;相对方法：limit和position值会在操作时被考虑到。相对方法：limit和position被忽略掉。
+         + slice();方法截取position到limit位置形成一个新的buffer，与原有buffer共享底层数组
+         + readonlyBuffer();获取一个只读的buffer，共享原有buffer底层数组，
+         实际的类HeapByteBufferR在put方法上直接抛异常，原有的是HeapByteBuffer
+         + wrap();用一个底层的数组创建一个buffer，共享一份数据，这种方式去创建buffer尽量使用创建好的buffer去修改内容
+         + allocateDirect();创建一个DirectXXXBuffer直接缓冲，通过底层的方式在堆外的内存中创建一个buffer
+            + 在堆外创建一个直接缓冲区，要想使java程序访问到则必须提供一个指针或者引用方式去访问，DirectXXXBuffer是java的一个
+         对象，他继承自Buffer，在Buffer中有个long类型的字段address，该字段是专门用来访问直接缓冲区数据的。
+         之所以将该字段放在Buffer不放在DirectXXXBuffer中是为了提高本地调用的速度。
+            + 操作系统要想操作java缓存中的数据，如果分配的是堆上的HeapXXXBuffer那么操作系统会将该缓冲区的内容复制到
+         操作系统的工作内存中，这样的话就多了一次数据拷贝的过程，如果用堆外内存则操作系统可以直接操作该部分数据，
+         这种方式叫zero copy 零拷贝
+        
