@@ -142,4 +142,23 @@
          + UTF-16LE(little endian),UTF-16BE(big endian) 在文件存储的开始加一个标识
          + UTF-8 变长字节表示形式，一般来说UTF-8会通过3个字节来表示中文，英文也是用一个字节表示
          + BOM(Byte Order Mark),字节序标识，windows的遗留问题（大端小端问题）
-      
+#### II.Netty
+   1. 零拷贝（复制操作，比如用户访问服务器请求html文件，传输过程，将服务器的html文件用磁盘转成data传给用户）
+      + read()操作步骤：UserSpace --read()sysCall--> KernelSpace --ask for data-->Hardware
+      --DMA--> KernelSpace --copy data to use --> UserSpace 一次用户空间到内核空间的切换一次内核空间
+      到用户空间的切换，一次硬盘到内核空间的数据拷贝，一次内核空间到用户空间的数据拷贝
+      + write()操作步骤：UserSpace --write()sysCall--> kernelSpace(socket buffer)--write data-->
+      netUser --done--> UserSpace 一次用户空间调用write到内核空间的切换，一次内核空间write完成到用户空间
+      的切换
+      + 以上的两个操作，copy过程经过了四次用户内核空间的切换，而数据到用户空间中只是暂存了一下并没有操作
+      + 零拷贝步骤：UserSpace --sendFile()sysCall--> KernelSpace -- ask for data--> Hardware
+      -- DMA --> kernelSpace -- write to socket buffer--> KernelSpace --write to net--> Kernel
+      -- done --> UserSpace 一次用户空间到内核空间切换，一次内核空间到用户空间的切换，中间的所有操作在内核
+      空间进行，操作系统意义上的零拷贝，不会再有内核空间向用户空间拷贝数据
+      + 以上的操作在内核空间中还是进行了一次数据拷贝，先是从硬件拷贝到内核空间，后再从内核空间拷贝到socket缓冲区
+      + 如果操作系统支持scattering和gathering会进一步减少copy时间，对于socket buffer可以通过指针探知到内核空间中
+      位置的数据，并不需要拷贝数据到socket buffer，只需要将文件描述符拷贝过去就行了
+      + 文件内存映射，将文件映射到内核空间中，操作系统提供对应的方法可以使用户直接操作文件。
+      + 最终的零拷贝时序：userSpace --sendFile()sysCall--> KernelSpace -- ask data--> Hardware
+      -- DMA copy --> kernelBuffer --CPU copy(fd,拷贝文件描述符，就是kernel中文件从哪读，读多少)-->
+      socketBuffer -- DMA copy(有fd就可以用gathering从多个地方读) --> protocolEngine(协议引擎，发送给网络)
