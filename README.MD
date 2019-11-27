@@ -122,4 +122,24 @@
             + 操作系统要想操作java缓存中的数据，如果分配的是堆上的HeapXXXBuffer那么操作系统会将该缓冲区的内容复制到
          操作系统的工作内存中，这样的话就多了一次数据拷贝的过程，如果用堆外内存则操作系统可以直接操作该部分数据，
          这种方式叫zero copy 零拷贝
-        
+      + ScatteringByteChannel (只读channel) 和 GatheringByteChannel (只写channel) 实现这两个接口的类可以通过向buffer数组中读写
+      实现分块读写。比如，http请求的时候请求头和请求体用两个不同的buffer来接收。
+   3. Selector 网络编程多路复用在java中的体现，Selector相当于linux的Epoll
+   4. 编码问题
+      + ASCII 7bit表示一个字符，共计可以表示128个字符 48--0,65--A,97--a
+      + ISO-8859-1 8 bit表示一个字符，即用一个字节表示一个字符。共计256个字符
+      它是用ASCII扩展来的，所以它是兼容ASCII的
+      + GB2312 对所有的汉字进行了编码，用两个字节表示一个汉字，不包含生僻字
+      + GBK 国标扩展，完全兼容GB2312
+      + big5 台湾制定的
+      + unicode 统一字符集，统一采用两个字节表示一个字符。\uxxxx表示
+         + unicode 出现的原因是太多的国家制定太多的字符集导致传输过程编码混乱
+         + unicode 的问题是很多国家只需要使用比如ASCII之类的字符集就够了，一个字节就足以表示一个字符，
+         而它却用两个字节来表示，本来1M的存储文件就得用2M来存储，浪费了太多的空间，于是就出现了UTF-8。
+      + UTF,Unicode Translation Format unicode转换格式
+         + unicode是编码方式，utf是存储方式；
+         + UTF-8，UTF-16等是Unicode的一种实现方式
+         + UTF-16LE(little endian),UTF-16BE(big endian) 在文件存储的开始加一个标识
+         + UTF-8 变长字节表示形式，一般来说UTF-8会通过3个字节来表示中文，英文也是用一个字节表示
+         + BOM(Byte Order Mark),字节序标识，windows的遗留问题（大端小端问题）
+      
