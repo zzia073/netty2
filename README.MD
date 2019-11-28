@@ -143,6 +143,7 @@
          + UTF-8 变长字节表示形式，一般来说UTF-8会通过3个字节来表示中文，英文也是用一个字节表示
          + BOM(Byte Order Mark),字节序标识，windows的遗留问题（大端小端问题）
 #### II.Netty
+
    1. 零拷贝（复制操作，比如用户访问服务器请求html文件，传输过程，将服务器的html文件用磁盘转成data传给用户）
       + read()操作步骤：UserSpace --read()sysCall--> KernelSpace --ask for data-->Hardware
       --DMA--> KernelSpace --copy data to use --> UserSpace 一次用户空间到内核空间的切换一次内核空间
@@ -162,3 +163,102 @@
       + 最终的零拷贝时序：userSpace --sendFile()sysCall--> KernelSpace -- ask data--> Hardware
       -- DMA copy --> kernelBuffer --CPU copy(fd,拷贝文件描述符，就是kernel中文件从哪读，读多少)-->
       socketBuffer -- DMA copy(有fd就可以用gathering从多个地方读) --> protocolEngine(协议引擎，发送给网络)
+   
+   2. netty启动过程中几个重要的类和方法
+      + EventLoopGroup 最终调用的是 MultithreadEventExecutorGroup 的构造方法，会创建一个executor
+        new ThreadPerTaskExecutor(newDefaultThreadFactory()); ThreadFactory 将线程的创建和线程要执行的任务解耦
+        Executor jdk1.5提供的一个对象，只有一个方法execute(command);命令模式设计方法，将命令command定义好交给Executor，
+      + ServerBootStrap 简单的启动类什么都没做，netty提供的辅助类，更方便的启动netty服务
+      + group()方法给AbstractServerBootStrap的属性赋值
+      + handler方法是用于group方法的第一个参数，childHandler是用于第二个参数
+      + bind()方法用于启动服务器
+         + doBind() -- initAndRegister();反射创建启动类的channel方法中传入的类
+         + Future 代表的是异步计算的结果 netty提供的Future中sync()方法会等待Future完成，同时添加了一些addListener方法
+         利用观察者模式，当Future完成的时候会去调用listener中的operationComplete方法传入Future，同时isSuccess和isDone分开
+          ```
+          ChannelFuture 完成示意图
+                                                +---------------------------+
+                                                | Completed successfully    |
+                                                +---------------------------+
+                                           +---->      isDone() = true      |
+           +--------------------------+    |    |   isSuccess() = true      |
+           |        Uncompleted       |    |    +===========================+
+           +--------------------------+    |    | Completed with failure    |
+           |      isDone() = false    |    |    +---------------------------+
+           |   isSuccess() = false    |----+---->      isDone() = true      |
+           | isCancelled() = false    |    |    |       cause() = non-null  |
+           |       cause() = null     |    |    +===========================+
+           +--------------------------+    |    | Completed by cancellation |
+                                           |    +---------------------------+
+                                           +---->      isDone() = true      |
+                                                | isCancelled() = true      |
+                                                +---------------------------+
+          ```
+         + ChannelFuture的等待方法await之类的超时并不能表示Channel的操作已完成，I/O超时的情况ChannelFuture会被标记为失败完成，
+         上图最右侧Completed with failure，一般在BootStrap启动类连接的时候设置选项连接超时来判定，不可以用future的等待方法
+         设置超时时间
+         + initAndRegister中创建了channel之后给channel中设置对应属性，然后把pipeline中添加上handler方法中的传入的处理器，同时
+         用ServerBootstrapAcceptor 把客户端的channel交由workerGroup去管理
+         + PipeLine 是ChannelHandler的集合，按顺序执行里边的所有Handler Inbound -- read() Outbound -- write()
+         + BossGroup和WorkerGroup分开因为accept方法只需要执行一次连接建立后就不需要执行，
+         而read和write需要执行多次来读写客户端传来和返回的数据
+         + ServerSocketChannel在创建的时候会创建一个ServerSocketChannelConfiguration 配置对象，
+         其中会创建一个自适应字节数组分配器
+         + AdaptiveRecvByteBufAllocator 根据上次读入缓冲区的字节数来去决定下次缓冲区大小分配
+   3. reactor 模式 反应器模式
+      + 日志处理器处理流程 连接阶段
+         + 服务端 1. register handler() 注册Acceptor 到 Initiation Dispatcher 中
+         + 服务端 2. handle_events() 启动 Initiation Dispatcher 调用
+         + 服务端 3. select() 阻塞 Initiation Dispatcher 调用
+         + 客户端 4. connect() 请求
+         + 服务端 5. handle_event() 事件发生 交给Acceptor
+         + 服务端 6. Acceptor accept() 7. create() 创建一个Handler 
+         + 服务端 8. register handler() 注册handler到Initiation Dispatcher 中
+      + 日志服务器处理流程 发送阶段
+         + 客户端 1. send() 客户端向服务器端发送数据到 Initiation Dispatcher
+         + 服务端 2. handle event() 初始化派发器找到对应Handler
+         + 服务端 3. Handler 处理 recv() 4. write() 5. return() 返回到 Initiation Dispatcher 中 返回给客户
+      + Reactor模式五大角色分析
+         1. Handler(句柄或是描述符)：本质上表示一种资源，是由操作系统提供的；该资源用于表示一个个的事件，比如说文件描述符，
+         或是针对网络编程中的Socket描述符。事件即可以来自于外部，也可以来自于内部；外部事件比如说客户端的连接请求，客户端发送过来
+         数据等；内部事件比如说操作系统产生的定时器事件等。它本质上就是一个文件描述符。Handle 是时间产生的发源地。
+         2. Synchronous Event Demultiplexer(同步事件分离器)：它本身是一个系统调用，用于等待事件的发生（事件可能是一个，也可能
+         是多个）。调用方在调用它的时候会被阻塞，一直阻塞到同步事件分离器上有事件产生为止。对于Linux来说，同步时间分离器指的就是
+         常用的I/O多路复用机制，比如说select、poll、epoll等。在Java NIO 领域中，同步时间分离器对应的组件就是Selector;对应的阻塞
+         方法就是select方法
+         3. Event Handler（事件处理器）： 本身由多个回调方法构成，这些回调方法构成了与应用相关的对于某个事件的反馈机制。Netty相比于
+         Java NIO 来说，在事件处理器这个角色上进行了一个升级，它为我们开发者提供了大量的回调方法，供我们在特定事件产生时实现相应的
+         回调方法进行业务逻辑的处理
+         4. Concrete Event Handler（具体事件处理器）：是事件处理器的实现。它本身实现了事件处理器所提供的的各种回调方法，从而实现了
+         特定于业务逻辑。它本质上就是我们所编写的一个个处理器的实现
+         5. Initiation Dispatcher（初始化分发器）：相当于Reactor角色就是netty中的EventLoop，它本身定义了一些规范，这些规范用于
+         事件的调度方式，同时又提供了应用进行事件处理器的注册、删除等设施。它本身是整个事件处理器的核心所在，Initiation Dispatcher
+         会通过同步事件分离器来等待事件的发生。一旦事件发生，Initiation Dispatcher首先会分理处每一个事件，然后调用事件处理器，最后
+         调用相关的回调方法处理这些事件。
+         ```
+         //每个事件处理器会拥有描述符信息、同时能处理各种发生的事件
+         Event Handler --owns--> handle 
+         //初始分发器开始用同步事件分离器把事件处理器注册上
+         Initiation Dispatcher --use--> Synchronous Event Demultiplexer  
+         Event Handler --register_handler(h)|remove_handler(h)--> Initiation Dispatcher
+         //初始分发器用同步事件分离器调用它的select方法阻塞等待获取事件发生
+         select();
+         //事件发生 调用具体的事件处理器的方法去处理事件
+         Concrete Event Handler --implement--> Event Handler
+         foreach h in handlers
+            h.handle_event();
+         end loop
+         ```
+      + Reactor模式流程
+         1. 当应用向Initiation Dispatcher注册具体的事件处理器时，应用会标识出该事件处理器希望Initiation Dispatcher在某个事件
+         发生时向其通知的该事件，该事件与Handle关联。
+         2. Initiation Dispatcher会要求每个事件处理器向其传递内部的Handle。该Handle向操作系统标识了事件处理器。
+         3. 当所有的事件处理器注册完毕后，应用会调用handle_events 方法来启动Initiation Dispatcher的事件循环。这时，Initiation
+         Dispatcher会将每个注册的事件管理器的Handle合并起来，并使用同步事件分离器等待这些事件的发生。比如说，TCP协议层会使用select
+         同步事件分离器操作等待客户端发送的数据到达连接的socket handle上。
+         4. 当与某个事件源对应的Handle变为ready状态时（比如说，TCP socket变为等待读状态时），同步事件分离器会通知Initiation
+         Dispatcher。
+         5. Initiation Dispatcher会触发事件处理器的回调方法，从而响应这个处于ready状态的Handle。当事件发生时，Initiation 
+         Dispatcher会被事件源激活的Handle作为『Key』来寻找并分发恰当的事件处理器回调方法。
+         6. Initiation Dispatcher会回调事件处理器的handle_events回调方法来执行特定于应用的功能。（开发者自己所编写的功能），从而
+         响应这个事件。所发生的的事件类型可以来作为该方法参数并被该方法内部使用来执行额外的特定于服务的分离或分发。
