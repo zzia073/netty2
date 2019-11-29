@@ -199,12 +199,13 @@
          设置超时时间
          + initAndRegister中创建了channel之后给channel中设置对应属性，然后把pipeline中添加上handler方法中的传入的处理器，同时
          用ServerBootstrapAcceptor 把客户端的channel交由workerGroup去管理
-         + PipeLine 是ChannelHandler的集合，按顺序执行里边的所有Handler Inbound -- read() Outbound -- write()
+         + ChannelPipeLine 是ChannelHandler的集合，按顺序执行里边的所有Handler Inbound -- read() Outbound -- write()
          + BossGroup和WorkerGroup分开因为accept方法只需要执行一次连接建立后就不需要执行，
          而read和write需要执行多次来读写客户端传来和返回的数据
          + ServerSocketChannel在创建的时候会创建一个ServerSocketChannelConfiguration 配置对象，
          其中会创建一个自适应字节数组分配器
          + AdaptiveRecvByteBufAllocator 根据上次读入缓冲区的字节数来去决定下次缓冲区大小分配
+         + bind之后的sync()方法是同步为了确保bind方法执行完成后获取对应的ChannelFuture对象一定是绑定完成的
    3. reactor 模式 反应器模式
       + 日志处理器处理流程 连接阶段
          + 服务端 1. register handler() 注册Acceptor 到 Initiation Dispatcher 中
@@ -262,3 +263,78 @@
          Dispatcher会被事件源激活的Handle作为『Key』来寻找并分发恰当的事件处理器回调方法。
          6. Initiation Dispatcher会回调事件处理器的handle_events回调方法来执行特定于应用的功能。（开发者自己所编写的功能），从而
          响应这个事件。所发生的的事件类型可以来作为该方法参数并被该方法内部使用来执行额外的特定于服务的分离或分发。
+   4. Netty重要的类
+      + ChannelPipeline
+         + ChannelPipeline 实现了Intercepting Filter 拦截过滤器模式，它和Channel互相包含内部都有对方的引用
+         + pipeLine.addLast(group,"handler",new MyBusinessLogicHandler());用事件循环组group去执行可能会阻塞io线程的业务逻辑
+         + ChannelPipeline 是线程安全的
+         + pipeline 中的addXXX方法在Channel被注册后，添加HandlerContext会调用对应Handler的handlerAdd()方法
+      + ChannelOption
+         + channelOption的作用是配置ChannelConfig
+         + channelOption并不维护值的信息，提供了set和get方法去获取值的内容
+         + ChannelOption和AttributeKey都是继承自Constant，且是单例的，都可以用等号的方式比较。
+         + ConstantPool就是用一个ConcurrentHashMap来存储Constant
+         + Constant接口的实现类都是用来做key的，值是通过其他方式设置的
+      + AttributeKey|Attribute
+         + AttributeMap 中存放着AttributeKey和Attribute 用于存放业务数据
+      + ChannelConfig
+         + 表示对整个channel的配置信息
+         + channel中设置的各种配置信息和属性都是被维护在Channel的内部属性中，option在config里，attribute在父类的attributeMap中
+      + ChannelHandlerContext 是ChannelPipeline和ChannelHandler交互的桥梁
+         + 一个ChannelHandler可以被多次添加到ChannelPipeLine 中，一个ChannelHandler可以属于多个ChannelHandlerContext
+         + 对handler的多次添加有个属性isSharable如果是true则可以被多次添加，否则属性added被添加过则抛出异常，不可再次添加
+         + ChannelHandler每向pipeline中添加一次都会生成一个新的ChannelHandlerContext与之对应
+         + handler向pipeline中添加就相当于把handler包装成context对象的双向链表中的一个元素增删一样
+      + ChannelInitializer 
+         + 它的initChannel中可以在Channel注册到EventLoop的时候把一些Handler放入channel中
+         + 它是个inboundHandler
+         + 在netty的childHandler()方法中会传入一个该类，用来添加Handler
+         + 启动的过程中也会添加一个ChannelInitializer用来将Acceptor组件添加到所有Handler的最后
+         + 该类实现了InboundHandler但是它的作用是给pipeline中添加Handler，也就是initChannel方法调用，
+         因此他在添加完Handler之后就是initChannel方法返回的时候会被移除出pipeline
+      + SingleThreadEventLoop
+      + ChannelFuture|ChannelPromise promise是提供了可以写入的future对象，给future增加set方法
+      + Unsafe NioMessageUnsafe 用来注册通道到Selector上的类
+   5. Netty EventLoop总结
+      1. 一个EventLoopGroup 当中会包含一个或多个EventLoop
+      2. 一个EventLoop 在它的整个生命周期中都只会与唯一一个Thread进行绑定。
+      3. 所有由EventLoop所处理的各种I/O事件都将在它所关联的那个Thread上进行处理。
+      4. 一个Channel在它的整个生命周期中只会注册在一个EventLoop上。
+      5. 一个EventLoop 在运行过程当中，会被分配给一个或者多个Channel。
+      6. 重要结论：在netty中，channel的实现一定是线程安全的；基于此，我们可以存储一个Channel的引用，并且在需要向远程断点发送数据是，
+      通过这个引用来调用Channel的相应方法；即便当时有很多线程都在使用它也不会出现多线程问题；而且，消息一定会被按照顺序发送出去。
+      7. 重要结论：我们在业务开发中，不要将长时间执行的耗时任务放入到EventLoop的执行队列中，因为它将会一直阻塞该线程所对应的所有
+      Channel上的其他执行任务，如果我们需要进行阻塞调用或是耗时的操作（实际开发中很常见），那么我们就需要使用一个专门的EventExecutor
+      （业务线程池）。
+         + 通常会有两种实现方式：
+         + 在ChannelHandler的回调方法中，使用自己定义的业务线程池，这样就可以实现异步调用。
+         + 借助于Netty提供的像ChannelPipeline添加ChannelHandler时调用的addLast方法来传递EventExecutor
+         + 说明：默认情况下（调用addLast(handler)）,ChannelHandler中的回调方法都是由I/O线程所执行，如果调用了
+         ChannelPipeline addLast(EventExecutorGroup group,ChannelHandler... handlers);方法，那么ChannelPipeline
+         中的回调方法就是又参数中的group线程组来执行的。
+      ```
+        //register 在AbstractChannel中的注册方法上这个判断
+        //如果执行当前方法的线程Thread.currentThread()==eventLoop.thread和EventLoop中的唯一线程是同一个
+        //那么直接注册Channel，否则把注册作为一个任务提交给当前的eventLoop去执行，这样始终是一个线程在操作，不会有多线程问题
+        //所有的Handler处理操作都是通过这一个线程去调用的，这些操作中如果有一个阻塞了，所有的其他的都得等待执行
+        //而所有Channel的Handler操作都会在这里等待，因此一定不能有长时间的I/O操作在handler里处理
+          if (eventLoop.inEventLoop()) {
+              register0(promise);
+          } else {
+              try {
+                  eventLoop.execute(new Runnable() {
+                      @Override
+                      public void run() {
+                          register0(promise);
+                      }
+                  });
+              } catch (Throwable t) {
+                  logger.warn(
+                          "Force-closing a channel whose registration task was not accepted by an event loop: {}",
+                          AbstractChannel.this, t);
+                  closeForcibly();
+                  closeFuture.setClosed();
+                  safeSetFailure(promise, t);
+              }
+          }
+      ```
