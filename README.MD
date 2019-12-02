@@ -110,7 +110,7 @@
          + get();put();都会是position++
          + flip();limit = position; position = 0;
          + clear();limit = capacity; position = 0;
-         + get;put;相对方法：limit和position值会在操作时被考虑到。相对方法：limit和position被忽略掉。
+         + get;put;相对方法：limit和position值会在操作时被考虑到。绝对方法：limit和position被忽略掉。
          + slice();方法截取position到limit位置形成一个新的buffer，与原有buffer共享底层数组
          + readonlyBuffer();获取一个只读的buffer，共享原有buffer底层数组，
          实际的类HeapByteBufferR在put方法上直接抛异常，原有的是HeapByteBuffer
@@ -315,7 +315,8 @@
       ```
         //register 在AbstractChannel中的注册方法上这个判断
         //如果执行当前方法的线程Thread.currentThread()==eventLoop.thread和EventLoop中的唯一线程是同一个
-        //那么直接注册Channel，否则把注册作为一个任务提交给当前的eventLoop去执行，这样始终是一个线程在操作，不会有多线程问题
+        //那么直接注册Channel，否则把注册作为一个任务提交给当前的eventLoop去执行，
+        //这样始终是一个线程在操作，不会有多线程问题
         //所有的Handler处理操作都是通过这一个线程去调用的，这些操作中如果有一个阻塞了，所有的其他的都得等待执行
         //而所有Channel的Handler操作都会在这里等待，因此一定不能有长时间的I/O操作在handler里处理
           if (eventLoop.inEventLoop()) {
@@ -329,12 +330,137 @@
                       }
                   });
               } catch (Throwable t) {
-                  logger.warn(
-                          "Force-closing a channel whose registration task was not accepted by an event loop: {}",
-                          AbstractChannel.this, t);
+                  //省略日志打印
                   closeForcibly();
                   closeFuture.setClosed();
                   safeSetFailure(promise, t);
               }
           }
       ```
+   6. Future | ChannelInboundHandlerAdapter | ReferenceCounted | Channel 和 ChannelHandlerContext的同名方法
+      + JDK所提供的Future只能通过手工方式检查执行结果，而这个操作是会阻塞的；Netty则对ChannelFuture进行了增强，通过
+      ChannelFutureListener以回调的方式来获取执行结果，去除了手工检查阻塞的操作，值得注意的是：ChannelFutureListener的
+      operationComplete方法是由I/O线程执行的，因此要注意的是不要再这里执行耗时操作，否则需要通过另外的线程或线程池来执行。
+      + Future是怎么知道这些异步操作是否完成的呢，是通过Promise对象来实现的，在所有的异步操作时都会给操作传入一个Promise对象
+      比如：Channel#write(Object msg,ChannelPromise promise);当write操作完成之后会在promise中设置操作完成，比如上边
+      的这个register操作register0(promise)执行成功失败都会safeSetXXX(promise);设置promise的状态
+      + ChannelInboundHandlerAdapter 适配器模式，实现了ChannelInboundHandler 里的方法，所有的实现都是直接调用下一个
+      ChannelHandlerContext对应的方法，相当于直接跳过该处理器执行下一个处理器的方法，我们可以复写这些方法。
+      + SimpleChannelInboundHandler的channelRead方法在执行完之后会调用底层的方法去释放msg占用的ByteBuffer的空间
+      channelRead方法使用了模板方法模式去调用ChannelRead0();
+      + ReferenceCounted 引用计数 retain()|release()
+      + 在Netty中有两种发送消息的方式，可以直接写到Channel中，也可以写到与ChannelHandler所关联的ChannelHandlerContext
+      中，对于前一种方式来说，消息会从ChannelPipeline的末尾开始流动；对于后一种方式来说，消息将从ChannelPipeline中的下一个
+      ChannelHandler开始流动。Context 1 -- 2 -- 3 -- 4 -- 5 比如5调用方法则下一个4调用如果5调用了channel的方法，则会
+      流经54321所有的
+      + 结论：
+         + ChannelHandlerContext与ChannelHandler之间的关联绑定关系是永远不会发生改变的，因此对其进行缓存是没有任何问题的。
+         + 对于与Channel的同名方法来说，ChannelHandlerContext的方法将会产生更短的事件流，所以我们应该在可能的情况下利用
+         这个特性来提升应用性能。
+   7. Nio复习和ByteBuf原理
+      + Nio复习
+         + 0 <= mark <= position <= limit <= position
+         + flip()方法 1.将limit值设为当前的position。2.将position设为0
+         + clear()方法 1.将limit值设为capacity。2.将position值设为0.
+         + compact()方法 compact本身是紧凑的意思，该方法的意思跟垃圾回收的一种方式类似，把数据移动到一边，其余的空间还可以用。
+            1. 将所有未读的数据复制到buffer起始位置处。
+            2. 将position设置为最后一个而未读元素的后面。
+            3. 将limit设为capacity。
+            4. 现在buffer就准备好了，但是不会覆盖未读的数据。
+      
+      + ByteBuf
+      
+      ```
+            可丢弃的字节           可读的字节          可写的字节
+        +-------------------+------------------+------------------+
+        | discardable bytes |  readable bytes  |  writable bytes  |
+        |                   |     (CONTENT)    |                  |
+        +-------------------+------------------+------------------+
+        |                   |                  |                  |
+        0      <=      readerIndex   <=   writerIndex    <=    capacity
+        
+        类似于ByteBuffer的compact()
+        BEFORE discardReadBytes()
+         
+               +-------------------+------------------+------------------+
+               | discardable bytes |  readable bytes  |  writable bytes  |
+               +-------------------+------------------+------------------+
+               |                   |                  |                  |
+               0      <=      readerIndex   <=   writerIndex    <=    capacity
+         
+         
+        AFTER discardReadBytes()
+         
+               +------------------+--------------------------------------+
+               |  readable bytes  |    writable bytes (got more space)   |
+               +------------------+--------------------------------------+
+               |                  |                                      |
+          readerIndex (0) <= writerIndex (decreased)        <=        capacity
+        
+        clear()方法重置readerIndex和writerIndex的位置为0
+      ```
+         + Netty Bytebuf所提供的3中缓冲区类型：
+            1. heap buffer.
+            2. direct buffer.
+            3. composite buffer.
+            
+            + Heap Buffer(堆缓冲区)
+            + 这是最常用的类型，ByteBuf将数据存储到JVM的堆空间中，并且将实际的数据存放到byte array中来实现
+            + 优点：由于数据是存储在JVM的堆中，因此可以快速的创建与快速的释放，并且它提供了直接访问内部字节数组的方法
+            + 缺点：每次读写数据时，都要先将数据复制到直接缓冲区中在进行网络传输。
+            + Direct Buffer(直接缓冲区)
+            + 优点：在使用Socket进行数据传送时，性能非常好，因为数据直接位于操作系统的内存中，所以不需要从JVM将数据复制
+            到直接缓冲区中，性能很好
+            + 缺点：因为Direct Buffer是直接在操作系统内存中的，所以内存空间的分配与释放要比堆空间更加复杂，而且速度慢一些
+            Netty通过提供内存池来解决这个问题。直接缓冲区并不支持通过字节数组的方式来访问数据。
+            + 重点：对于后端的业务消息的编解码来说，推荐使用HeapByteBuf；对于I/O通信线程在读写缓冲区时，推荐使用DirectBytebuf
+            + Composite Buffer(复合缓冲区) 当需要统一操作两种缓冲区时可以使用该类
+         + JDK的ByteBuffer与Netty的ByteBuffer之间的差异：
+            1. Netty的ByteBuf采用了读写索引分离的策略（readerIndex与writerIndex），一个初始化（里面尚未有任何数据）的
+            ByteBuf的readerIndex与writerIndex值都为0.
+            2. 当读索引与写索引处于同一个位置时，如果我们继续读取，那么就会抛出IndexOutOfBoundsException.
+            3. 对于ByteBuf的任何读写操作都会分别单独维护读索引与写索引。maxCapacity最大容量默认的限制就是Integer.MAX_VALUE.
+            
+         + JDK的ByteBuffer的缺点：
+            1. final byte[] hb; 这是JDK的ByteBuffer对象中用于存储数据的对象声明；可以看到，其字节数组是被声明为final的，
+            也就是长度是固定不变的，一旦分配好后不能动态扩容与收缩；而且当待存储的数据字节很大时就很有可能出现
+            IndexOutOfBoundsException。如果要预防这个异常，那就需要在存储之前完全确定好待存储的字节大小。如果ByteBuffer
+            的空间不足，我们只有一种解决方案：创建一个全新的ByteBuffer对象，然后再将之前的ByteBuffer中的数据复制过去，这一切操作
+            都需要由开发者自己来手动完成。
+            2.ByteBuffer只使用一个position指针来标识位置信息，在进行读写切换时就需要调用flip方法或是rewind方法，使用起来不方便
+            
+         + Netty的ByteBuf的优点：
+            1. 存储字节的数组是动态的，其最大值默认是Integer.MAX_VALUE。这里的动态性是体现在write方法中的，write方法在执行时
+            会判断buffer容量，如果不足则自动扩容。
+            2. ByteBuf的读写索引是完全分开的，使用起来就很方便。
+            
+         + 自旋锁
+            ```
+            private ByteBuf retain0(int increment) {
+                //占用CPU资源一直执行直到原子操作成功为止
+                for (;;) {
+                    //原值 volatile修饰的共享变量
+                    int refCnt = this.refCnt;
+                    //期望值 对共享变量修改后的期待
+                    final int nextCnt = refCnt + increment;
+        
+                    // Ensure we not resurrect (which means the refCnt was 0) 
+                    //and also that we encountered an overflow.
+                    //确保refCnt一定是大于0，如果refCnt变成0还进行此操作则要抛出异常
+                    if (nextCnt <= increment) {
+                        throw new IllegalReferenceCountException(refCnt, increment);
+                    }
+                    //原子操作 操作是否达到目标
+                    if (refCntUpdater.compareAndSet(this, refCnt, nextCnt)) {
+                        break;
+                    }
+                }
+                return this;
+            }
+            ```
+         + AtomicIntegerFieldUpdater 要点总结：
+            1. 更新器更新的必须是int类型变量，不能是其包装类型。
+            2. 更新器更新的必须是volatile类型变量，确保线程之间共享变量时的立即可见性。
+            
+            netty为什么不用AtomicInteger因为这样的话每个ByteBuf里都要封装一个AtomicInteger变量，而用
+            AtomicIntegerFieldUpdater用一个全局的静态变量可以更新所有创建的该类中的变量性能有所提升。
