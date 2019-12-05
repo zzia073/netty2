@@ -464,3 +464,24 @@
             
             netty为什么不用AtomicInteger因为这样的话每个ByteBuf里都要封装一个AtomicInteger变量，而用
             AtomicIntegerFieldUpdater用一个全局的静态变量可以更新所有创建的该类中的变量性能有所提升。
+   8. Netty处理器
+      + Netty处理器重要概念
+         1. Netty的处理器可以分为两类：入站处理器与出栈处理器。
+         2. 入站处理器的顶层是ChannelInboundHandler，出站处理器的顶层是ChannelOutBoundHandler
+         3. 数据处理时常用的各种编解码器本质上都是处理器。
+         4. 编解码器：无论我们想网络中写入的数据是什么类型（int、char、String、二进制等），数据在网络中传递时，其都是以字节流
+         的形式呈现的；将数据由原本的形式转换为字节流的操作称为编码（encode），将数据由字节转换为它原本的格式或是其他格式的操作
+         称为解码（decode），编解码统一称为codec。
+         5. 编码：本质上是一种出站处理器；因此，编码一定是一种ChannelOutBoundHandler。
+         6. 解码：本质上是一种入站处理器；因此，解码一定是一种ChannelInBoundHandler。
+         7. 在Netty中，编码器通常以XXXEncoder命名，解码器通常以XXXDecoder命名。
+      + 编解码器
+         + ByteToMessageDecoder 和 MessageToByteEncoder<I>
+         + protected abstract void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception;
+         + protected abstract void encode(ChannelHandlerContext ctx, I msg, ByteBuf out) throws Exception;
+         + 为什么解码器没有泛型而编码器有泛型，因为encode方法调用前需要强转消息类型获取对应matcher判断是否上一个处理器传来的消息是
+         泛型指定的可以编码的类型，不指定泛型就无法进行判断，如果是才调用否则不调用encode方法，而decode不需要判断消息类型
+      + TCP粘包和拆包。
+      + 关于Netty编解码器的重要结论
+         + 无论是编码器还是解码器，其所接受的消息类型必须要与待处理的参数类型一直，否则该编码器或解码器并不会执行
+         + 在解码器进行数据解码时，一定要记得判断缓冲（ByteBuf)中的数据是否足够，否则会产生一些问题。
